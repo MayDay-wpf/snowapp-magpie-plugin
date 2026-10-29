@@ -67,6 +67,31 @@ magpie plugin add /path/to/snowapp-magpie-plugin
 - **设置页**：界面自己缓存了档案列表，刷新 / 重开设置页后才会显示新的启用档案。
 - 如果 Snow App 正在运行，SQLite 的 WAL 模式允许并发写入；插件设置了 5 秒 `busy_timeout`。
 
+## 跨平台（Windows / Linux / macOS）
+
+Snow App 的 API 数据库三端都在 **用户主目录** 下的 `.snowapp`，不是 Windows 的 `%APPDATA%`，也不是 Linux 的 XDG 目录（见 Snow App 源码 `native/src/storage/paths.rs` 的 `dirs_next::home_dir()`）：
+
+| 系统 | 数据库 |
+| --- | --- |
+| macOS | `/Users/<user>/.snowapp/snowapp.db` |
+| Linux | `/home/<user>/.snowapp/snowapp.db` |
+| Windows | `C:\Users\<user>\.snowapp\snowapp.db` |
+
+插件用 `os.homedir()` + `path.join()` 拼接，所以三端分隔符正确；还会额外探测：
+
+- macOS App Sandbox：`~/Library/Containers/com.snow.app/Data/.snowapp/snowapp.db`
+- Linux Flatpak：`~/.var/app/com.snow.app/.snowapp/snowapp.db`
+- `SNOWAPP_DB_PATH`：显式指定数据库路径（测试、便携安装）
+- `SNOWAPP_MAGPIE_HOME`：显式指定配置目录；设置后只在该目录下找数据库，不会回退到真实 HOME
+
+其他平台细节：
+
+- Windows 的 `rename` 不能直接覆盖已有文件，状态文件写入有 unlink + rename + 直接写入的 fallback；
+- SQLite 使用 `PRAGMA busy_timeout = 5000`，Snow App 正在运行时也能排队写入；
+- CI 在 `ubuntu-latest` / `windows-latest` / `macos-latest` 三平台跑同一套单测。
+
+> 说明：没有在真实 Windows / Linux 的 Snow App 实例上跑过（只在 macOS 实机验证）。如果 Snow App 跑在 Flatpak / Snap 等会重映射 HOME 的沙箱里，`agent.mjs` 的 `dir: "~/.snowapp"` 可能检测不到 Agent 行；这种情况把 `dir` 改成实际目录，或用 `SNOWAPP_DB_PATH` 指定数据库。
+
 ## 限制与注意事项
 
 - **先断开，再卸载插件**：如果在接入状态下直接卸载，Bun 同步器会随宿主停止，`magpie-agent` 档案可能留在 Snow App 里。到 Agents 页面关掉开关即可恢复。

@@ -26,8 +26,56 @@ export function paths() {
     dir,
     config: join(dir, CONFIG_NAME),
     state: join(dir, STATE_NAME),
-    db: join(dir, DB_NAME),
+    db: resolveDbPath(dir),
   };
+}
+
+// Snow App resolves its data directory with Rust's `dirs_next::home_dir()`
+// (native/src/storage/paths.rs), so the database is under the user's home
+// directory on every OS:
+//
+//   macOS    /Users/<user>/.snowapp/snowapp.db
+//   Linux    /home/<user>/.snowapp/snowapp.db
+//   Windows  C:\Users\<user>\.snowapp\snowapp.db
+//
+// The candidates also cover a packaged/sandboxed Snow App whose HOME is
+// remapped (macOS App Sandbox, Flatpak), and let a custom HOME/portable setup
+// win when the normal path has no database.
+export function resolveDbPath(configDir) {
+  const explicit = process.env.SNOWAPP_DB_PATH;
+  if (explicit) return explicit;
+  // An explicit home is an isolated setup (tests, a portable install): never
+  // fall through to the real home and touch a different Snow App database.
+  if (process.env.SNOWAPP_MAGPIE_HOME) return join(configDir, DB_NAME);
+
+  const candidates = [];
+  const push = (value) => {
+    if (value && !candidates.includes(value)) candidates.push(value);
+  };
+  // Tests and an explicit SNOWAPP_MAGPIE_HOME keep the database beside the
+  // config; a normal install has configDir = ~/.snowapp.
+  push(join(configDir, DB_NAME));
+
+  const homes = [];
+  const pushHome = (value) => {
+    if (value && !homes.includes(value)) homes.push(value);
+  };
+  pushHome(process.env.SNOWAPP_MAGPIE_HOME);
+  pushHome(homedir());
+  pushHome(process.env.HOME);
+  pushHome(process.env.USERPROFILE);
+  for (const home of homes) {
+    push(join(home, ".snowapp", DB_NAME));
+    // macOS App Sandbox container
+    push(join(home, "Library", "Containers", "com.snow.app", "Data", ".snowapp", DB_NAME));
+    // Linux Flatpak
+    push(join(home, ".var", "app", "com.snow.app", ".snowapp", DB_NAME));
+  }
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return candidates[0] || join(configDir, DB_NAME);
 }
 
 function readJson(file) {
@@ -39,21 +87,31 @@ function readJson(file) {
 }
 
 function writeJsonAtomic(file, value) {
+  const text = JSON.stringify(value, null, 2);
   const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  writeFileSync(tmp, JSON.stringify(value, null, 2), {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  writeFileSync(tmp, text, { encoding: "utf8", mode: 0o600 });
   try {
     renameSync(tmp, file);
+    return;
   } catch {
     // Windows cannot replace an existing file with rename(); retry once.
-    try {
-      unlinkSync(file);
-    } catch {
-      // The file may not exist yet.
-    }
+  }
+  try {
+    unlinkSync(file);
+  } catch {
+    // The file may not exist yet, or another magpie has it open.
+  }
+  try {
     renameSync(tmp, file);
+    return;
+  } catch {
+    // A locked destination (Windows) still lets a direct write through.
+  }
+  writeFileSync(file, text, { encoding: "utf8", mode: 0o600 });
+  try {
+    unlinkSync(tmp);
+  } catch {
+    // Already gone.
   }
 }
 
@@ -242,7 +300,7 @@ function columnsOf(db) {
 
 async function applyConnection(conn) {
   const db = await openDatabase();
-  if (!db) return { ok: false, reason: "Snow App database not found" };
+  if (!db) return { ok: false, reason: `Snow App database not found (${paths().db})` };
   try {
     const columns = columnsOf(db);
     if (!columns.has("profile_name")) {
@@ -306,7 +364,7 @@ async function restoreConnection() {
   const state = readJson(p.state);
   if (!state) return { ok: true, restored: false };
   const db = await openDatabase();
-  if (!db) return { ok: false, reason: "Snow App database not found" };
+  if (!db) return { ok: false, reason: `Snow App database not found (${paths().db})` };
   try {
     const columns = columnsOf(db);
     if (!columns.has("profile_name")) {

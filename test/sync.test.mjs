@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   resetSyncState,
   syncOnce,
+  paths,
   PROFILE_NAME,
   STATE_NAME,
   CONFIG_NAME,
@@ -111,10 +112,12 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "snowapp-magpie-"));
   process.env.SNOWAPP_MAGPIE_HOME = dir;
   dbPath = join(dir, DB_NAME);
+  process.env.SNOWAPP_DB_PATH = dbPath;
   resetSyncState();
 });
 
 afterEach(() => {
+  delete process.env.SNOWAPP_DB_PATH;
   if (previousHome === undefined) delete process.env.SNOWAPP_MAGPIE_HOME;
   else process.env.SNOWAPP_MAGPIE_HOME = previousHome;
   rmSync(dir, { recursive: true, force: true });
@@ -122,6 +125,16 @@ afterEach(() => {
 });
 
 describe("snowapp magpie sync", () => {
+  test("resolves Snow App's database beside the config directory", () => {
+    expect(paths().db).toBe(join(dir, DB_NAME));
+  });
+
+  test("honours SNOWAPP_DB_PATH for a relocated database", () => {
+    const relocated = join(dir, "relocated.db");
+    process.env.SNOWAPP_DB_PATH = relocated;
+    expect(paths().db).toBe(relocated);
+  });
+
   test("creates the magpie-agent profile and activates it", async () => {
     seed();
     writeConfig(config());

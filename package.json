@@ -1,6 +1,6 @@
 {
   "name": "snowapp-magpie-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Snow App as a magpie agent: pick one of magpie's models and Snow App's API profile follows, written straight into its SQLite database.",
   "type": "module",
   "files": [
